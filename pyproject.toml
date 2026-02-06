@@ -1,0 +1,16 @@
+[project]
+name = "patientoverview"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic",
+    "openai",
+    "python-dotenv",
+    "langchain",
+    "langchain-openai",
+    "langchain-mistralai",
+    "langchain-community",
+    "streamlit>=1.53.1",
+    "pandas>=2.3.3",
+]

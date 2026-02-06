@@ -1,0 +1,27 @@
+version: '3'
+
+tasks:
+  run:
+    desc: Start the Streamlit application
+    cmds:
+      - uv run streamlit run app.py
+
+  cli:
+    desc: Run the CLI version of the application
+    cmds:
+      - uv run python main.py
+
+  test:
+    desc: Run the mock tests
+    cmds:
+      - uv run python test_mock.py
+
+  stop:
+    desc: Stop any running Streamlit instances
+    cmds:
+      - pkill -f "streamlit run app.py" || echo "No streamlit process found"
+
+  install:
+    desc: Install dependencies using uv
+    cmds:
+      - uv sync
