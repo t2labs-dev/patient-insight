@@ -117,15 +117,8 @@ jobs:
           TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
           TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
         run: |
-          terraform plan -no-color -out=tfplan
+          terraform plan -no-color
         continue-on-error: false
-
-      - name: Save Terraform Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: terraform/tfplan
-          retention-days: 5
 
       - name: Create Plan Summary
         if: always()
@@ -214,12 +207,6 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan
-          path: terraform/
-
       - name: Terraform Apply
         id: apply
         env:
@@ -227,7 +214,7 @@ jobs:
           TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
           TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
         run: |
-          terraform apply -auto-approve tfplan
+          terraform apply -auto-approve
 
       - name: Get Outputs
         id: output
