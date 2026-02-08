@@ -21,20 +21,6 @@ variable "image_identifier" {
   type        = "string"
 }
 
-variable "openai_api_key" {
-  description = "OpenAI API Key"
-  type        = "string"
-  sensitive   = true
-  default     = ""
-}
-
-variable "mistral_api_key" {
-  description = "Mistral API Key"
-  type        = "string"
-  sensitive   = true
-  default     = ""
-}
-
 variable "model_provider" {
   description = "Model provider (openai, mistral, ollama)"
   type        = "string"

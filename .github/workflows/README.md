@@ -154,11 +154,11 @@ aws iam attach-role-policy \
 Add the following secrets to your GitHub repository:
 - Go to **Settings** → **Secrets and variables** → **Actions**
 - Add **New repository secrets**:
-  - `AWS_ROLE_TO_ASSUME`: The ARN of the IAM role created above (e.g., `arn:aws:iam::123456789012:role/GitHubActionsRole`)
-  - `OPENAI_API_KEY`: Your OpenAI API key (required for Terraform)
-  - `MISTRAL_API_KEY`: Your Mistral API key (optional, if using Mistral)
+  - `AWS_ROLE_TO_ASSUME`: The ARN of the IAM role created above (e.g., `arn:aws:iam::123456789012:role/GitHubActionsRole`) - **Required**
   - `MODEL_PROVIDER`: Model provider to use (optional, defaults to `openai`)
   - `MODEL_NAME`: Model name to use (optional, defaults to `gpt-4o`)
+
+**Note**: API keys (OpenAI, Mistral) are now stored securely in AWS Systems Manager Parameter Store and are configured after infrastructure deployment. They are NOT stored in GitHub secrets.
 
 #### Environment Setup (for manual deployment)
 
@@ -214,15 +214,43 @@ export ECR_REPO=$(aws ecr describe-repositories \
 # Plan and apply
 terraform plan \
   -var="image_identifier=${ECR_REPO}:latest" \
-  -var="openai_api_key=${OPENAI_API_KEY}" \
   -var="model_provider=openai" \
   -var="model_name=gpt-4o"
 
 terraform apply \
   -var="image_identifier=${ECR_REPO}:latest" \
-  -var="openai_api_key=${OPENAI_API_KEY}" \
   -var="model_provider=openai" \
   -var="model_name=gpt-4o"
+```
+
+#### Important: Configure API Keys After Deployment
+
+After Terraform deployment completes, you must set your API keys in AWS Systems Manager Parameter Store:
+
+```bash
+# Get the parameter names from Terraform outputs
+terraform output ssm_openai_api_key_parameter
+terraform output ssm_mistral_api_key_parameter
+
+# Set your API keys
+aws ssm put-parameter \
+  --name "/patient-insight-extractor/openai-api-key" \
+  --value "your-actual-openai-key-here" \
+  --type SecureString \
+  --overwrite \
+  --region eu-west-3
+
+aws ssm put-parameter \
+  --name "/patient-insight-extractor/mistral-api-key" \
+  --value "your-actual-mistral-key-here" \
+  --type SecureString \
+  --overwrite \
+  --region eu-west-3
+
+# Restart App Runner to pick up the new values
+aws apprunner start-deployment \
+  --service-arn $(terraform output -raw app_runner_service_arn) \
+  --region eu-west-3
 ```
 
 ## Usage
@@ -248,6 +276,34 @@ To apply the infrastructure changes:
 7. Review and approve the infrastructure changes
 8. The infrastructure will be created/updated
 9. The App Runner service URL will be displayed in the summary
+
+**Step 3: Configure API Keys**
+
+After successful deployment, set your API keys in AWS Systems Manager Parameter Store:
+
+```bash
+# The workflow output will show the exact parameter names, but typically:
+aws ssm put-parameter \
+  --name "/patient-insight-extractor/openai-api-key" \
+  --value "your-actual-openai-key-here" \
+  --type SecureString \
+  --overwrite \
+  --region eu-west-3
+
+aws ssm put-parameter \
+  --name "/patient-insight-extractor/mistral-api-key" \
+  --value "your-actual-mistral-key-here" \
+  --type SecureString \
+  --overwrite \
+  --region eu-west-3
+
+# Restart App Runner to pick up the new API keys
+aws apprunner start-deployment \
+  --service-arn <ARN_FROM_TERRAFORM_OUTPUT> \
+  --region eu-west-3
+```
+
+The workflow summary will provide the exact commands to run.
 
 ### Deploying the Application
 
@@ -289,7 +345,7 @@ After deployment:
 - Ensure the OIDC provider is configured correctly
 
 ### Terraform Plan fails
-- Check that all required secrets are set (`OPENAI_API_KEY`, etc.)
+- Check that all required secrets are set (`AWS_ROLE_TO_ASSUME`)
 - Verify AWS credentials have necessary permissions
 - Review the error in the Actions logs
 - Run `terraform validate` locally to check configuration
@@ -316,7 +372,34 @@ After deployment:
 - Try updating the service manually to test permissions
 - Check if auto-deployments are disabled in App Runner
 
-### Missing API keys or environment variables
-- Verify all secrets are configured in GitHub repository settings
-- Check that environment variables are correctly set in `terraform/variables.tf`
-- Ensure secrets are referenced correctly in the workflow files
+### Application not working / API errors
+- Verify API keys are set in AWS Systems Manager Parameter Store
+- Check the parameter values:
+  ```bash
+  aws ssm get-parameter --name "/patient-insight-extractor/openai-api-key" --with-decryption --region eu-west-3
+  ```
+- Ensure the App Runner instance role has permissions to read SSM parameters
+- Check App Runner logs in CloudWatch for specific errors
+- Restart the App Runner service after setting/updating API keys
+
+### Managing API Keys
+To update API keys:
+```bash
+# Update the parameter
+aws ssm put-parameter \
+  --name "/patient-insight-extractor/openai-api-key" \
+  --value "new-key-value" \
+  --type SecureString \
+  --overwrite \
+  --region eu-west-3
+
+# Restart App Runner to pick up the change
+aws apprunner start-deployment --service-arn <ARN> --region eu-west-3
+```
+
+To view current parameter names:
+```bash
+cd terraform
+terraform output ssm_openai_api_key_parameter
+terraform output ssm_mistral_api_key_parameter
+```

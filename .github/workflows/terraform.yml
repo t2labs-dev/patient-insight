@@ -93,8 +93,6 @@ jobs:
         id: plan
         env:
           TF_VAR_image_identifier: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          TF_VAR_mistral_api_key: ${{ secrets.MISTRAL_API_KEY }}
           TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
           TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
         run: |
@@ -203,18 +201,21 @@ jobs:
         id: apply
         env:
           TF_VAR_image_identifier: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          TF_VAR_mistral_api_key: ${{ secrets.MISTRAL_API_KEY }}
           TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
           TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
         run: |
           terraform apply -auto-approve tfplan
 
-      - name: Get App Runner URL
+      - name: Get Outputs
         id: output
         run: |
           SERVICE_URL=$(terraform output -raw app_runner_service_url 2>/dev/null || echo "not available")
+          OPENAI_PARAM=$(terraform output -raw ssm_openai_api_key_parameter 2>/dev/null || echo "not available")
+          MISTRAL_PARAM=$(terraform output -raw ssm_mistral_api_key_parameter 2>/dev/null || echo "not available")
+
           echo "service-url=${SERVICE_URL}" >> $GITHUB_OUTPUT
+          echo "openai-param=${OPENAI_PARAM}" >> $GITHUB_OUTPUT
+          echo "mistral-param=${MISTRAL_PARAM}" >> $GITHUB_OUTPUT
 
       - name: Create Apply Summary
         if: always()
@@ -228,9 +229,31 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Service URL" >> $GITHUB_STEP_SUMMARY
           echo "🚀 **App Runner URL**: https://${{ steps.output.outputs.service-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚠️ Next Steps: Configure API Keys" >> $GITHUB_STEP_SUMMARY
+          echo "API keys are stored in AWS Systems Manager Parameter Store. Set them manually:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Set OpenAI API Key" >> $GITHUB_STEP_SUMMARY
+          echo "aws ssm put-parameter --name \"${{ steps.output.outputs.openai-param }}\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --value \"your-openai-key-here\" --type SecureString --overwrite \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --region ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Set Mistral API Key" >> $GITHUB_STEP_SUMMARY
+          echo "aws ssm put-parameter --name \"${{ steps.output.outputs.mistral-param }}\" \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --value \"your-mistral-key-here\" --type SecureString --overwrite \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --region ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Restart App Runner to pick up the new values" >> $GITHUB_STEP_SUMMARY
+          echo "aws apprunner start-deployment --service-arn <SERVICE_ARN> --region ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Apply Status
         if: steps.apply.outcome == 'success'
         run: |
           echo "✅ Infrastructure deployment completed successfully!"
           echo "Service URL: https://${{ steps.output.outputs.service-url }}"
+          echo ""
+          echo "⚠️ IMPORTANT: Set your API keys in AWS Systems Manager Parameter Store"
+          echo "  - OpenAI: ${{ steps.output.outputs.openai-param }}"
+          echo "  - Mistral: ${{ steps.output.outputs.mistral-param }}"
