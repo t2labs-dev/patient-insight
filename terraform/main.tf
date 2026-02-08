@@ -1,3 +1,13 @@
+terraform {
+  backend "s3" {
+    bucket       = "patient-insight-tf-state"
+    key          = "terraform.tfstate"
+    region       = "eu-west-3"
+    encrypt      = true
+    use_lockfile = true
+  }
+}
+
 provider "aws" {
   region = var.aws_region
 }
