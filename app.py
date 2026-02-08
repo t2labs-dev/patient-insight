@@ -60,7 +60,7 @@ def highlight_text(text, insights):
     for term in sorted_terms:
         # Case insensitive replacement with highlight
         pattern = re.compile(re.escape(term), re.IGNORECASE)
-        highlighted = pattern.sub(f'<span style="background-color: #ffff00; color: black; font-weight: bold;">\g<0></span>', highlighted)
+        highlighted = pattern.sub(r'<span style="background-color: #ffff00; color: black; font-weight: bold;">\g<0></span>', highlighted)
         
     return highlighted
 

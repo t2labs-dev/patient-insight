@@ -2,7 +2,7 @@
 name = "patientoverview"
 version = "0.1.0"
 description = "Add your description here"
-requires-python = ">=3.14"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "pydantic",
     "openai",
@@ -13,4 +13,5 @@ dependencies = [
     "langchain-community",
     "streamlit>=1.53.1",
     "pandas>=2.3.3",
+    "boto3>=1.34.0",
 ]
