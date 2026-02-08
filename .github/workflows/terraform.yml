@@ -22,6 +22,7 @@ on:
         options:
           - plan
           - apply
+          - destroy
         default: 'plan'
 
 env:
@@ -283,3 +284,63 @@ jobs:
           echo "⚠️ IMPORTANT: Set your API keys in AWS Systems Manager Parameter Store"
           echo "  - OpenAI: ${{ steps.output.outputs.openai-param }}"
           echo "  - Mistral: ${{ steps.output.outputs.mistral-param }}"
+
+  terraform-destroy:
+    name: Terraform Destroy
+    needs: terraform-plan
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    environment:
+      name: terraform-production
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Get ECR repository URI
+        id: ecr-uri
+        run: |
+          ECR_URI=$(aws ecr describe-repositories \
+            --repository-names patient-insight \
+            --region ${{ env.AWS_REGION }} \
+            --query 'repositories[0].repositoryUri' \
+            --output text 2>/dev/null || echo "dummy")
+
+          echo "ecr-uri=${ECR_URI}" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        id: destroy
+        env:
+          TF_VAR_image_identifier: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest
+          TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
+          TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
+        run: |
+          terraform destroy -auto-approve
+
+      - name: Create Destroy Summary
+        if: always()
+        run: |
+          echo "## Terraform Destroy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Destroy Status**: ${{ steps.destroy.outcome == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
