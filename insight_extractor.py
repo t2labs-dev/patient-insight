@@ -1,5 +1,6 @@
-import warnings
 import os
+import warnings
+
 from dotenv import load_dotenv
 from langchain_mistralai import ChatMistralAI
 
@@ -11,9 +12,18 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.chat_models import ChatOllama
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
-from typing import List, Optional, Union
+from typing import List, Optional
+from enum import Enum
 
 load_dotenv()
+
+
+class Sexe(str, Enum):
+    MASCULIN = "masculin"
+    FEMININ = "feminin"
+    AUTRE = "autre"
+    INCONNU = "inconnu"
+
 
 class Treatment(BaseModel):
     name: str = Field(..., description="Nom du médicament")
@@ -22,13 +32,22 @@ class Treatment(BaseModel):
 
 class PatientInsights(BaseModel):
     age: Optional[int] = Field(None, description="Âge du patient")
-    sexe: Optional[str] = Field(None, description="Sexe du patient")
+    sexe: Optional[Sexe] = Field(None, description="Sexe du patient")
     antecedents_medicaux: List[str] = Field(..., description="Antécédents médicaux du patient")
     traitements_habituels: List[Treatment] = Field(..., description="Liste des traitements habituels")
     raison_hospitalisation: str = Field(..., description="Pourquoi le patient est hospitalisé")
     traitement_sortie: List[Treatment] = Field(..., description="Traitements prévus à la sortie")
     fonction_renale: str = Field(..., description="Informations sur la fonction rénale (ex: Clairance, créatinine)")
     fonction_hepatique: str = Field(..., description="Informations sur la fonction hépatique (ex: BHC, ASAT/ALAT)")
+    
+    def normalize(self):
+        self.antecedents_medicaux = sorted(self.antecedents_medicaux, key=lambda x: x.lower())
+        self.traitements_habituels = sorted(self.traitements_habituels, key=lambda t: t.name.lower())
+        for treatment in self.traitements_habituels:
+            treatment.name = treatment.name.upper()
+        self.traitement_sortie = sorted(self.traitement_sortie, key=lambda t: t.name.lower())
+        for treatment in self.traitement_sortie:
+            treatment.name = treatment.name.upper()
 
 class ComparisonResult(BaseModel):
     medication_name: str
@@ -68,8 +87,7 @@ class InsightExtractor:
         try:
             structured_llm = self.llm.with_structured_output(PatientInsights)
             prompt = ChatPromptTemplate.from_messages([
-                ("system", "Tu es un assistant médical expert en extraction de données structurées à partir de comptes-rendus d'hospitalisation en français. "
-                           "Les listes de traitements doivent être ordonnées par ordre alphabétique (insensible à la casse) et le nom des médicaments doit être en MAJUSCULES."),
+                ("system", "Tu es un assistant médical expert en extraction de données structurées à partir de comptes-rendus d'hospitalisation en français."),
                 ("user", "Extrait les informations structurées du texte suivant :\n\n{text}")
             ])
             chain = prompt | structured_llm

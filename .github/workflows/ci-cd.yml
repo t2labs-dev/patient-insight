@@ -1,0 +1,145 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REPOSITORY: patient-insight-extractor
+  APP_RUNNER_SERVICE_NAME: patient-insight-extractor
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image-uri: ${{ steps.build-image.outputs.image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker buildx build \
+            --tag $IMAGE_URI \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --load \
+            .
+          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Run tests
+        env:
+          IMAGE_URI: ${{ steps.build-image.outputs.image }}
+        run: |
+          docker run --rm $IMAGE_URI uv run python test_mock.py
+
+      - name: Push image to Amazon ECR
+        if: github.ref == 'refs/heads/main'
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Build summary
+        run: |
+          echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image URI**: ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tests**: Passed ✅" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to AWS App Runner
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.service-url }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update App Runner service
+        id: deploy
+        env:
+          IMAGE_URI: ${{ needs.build-and-test.outputs.image-uri }}
+        run: |
+          # Get the current service ARN
+          SERVICE_ARN=$(aws apprunner list-services \
+            --region $AWS_REGION \
+            --query "ServiceSummaryList[?ServiceName=='$APP_RUNNER_SERVICE_NAME'].ServiceArn | [0]" \
+            --output text)
+
+          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
+            echo "Error: App Runner service not found. Please deploy infrastructure with Terraform first."
+            exit 1
+          fi
+
+          echo "Updating App Runner service: $SERVICE_ARN"
+
+          # Trigger a new deployment with the new image
+          aws apprunner start-deployment \
+            --service-arn $SERVICE_ARN \
+            --region $AWS_REGION
+
+          # Wait for deployment to complete
+          echo "Waiting for deployment to complete..."
+          aws apprunner wait service-running \
+            --service-arn $SERVICE_ARN \
+            --region $AWS_REGION
+
+          # Get the service URL
+          SERVICE_URL=$(aws apprunner describe-service \
+            --service-arn $SERVICE_ARN \
+            --region $AWS_REGION \
+            --query 'Service.ServiceUrl' \
+            --output text)
+
+          echo "service-url=https://$SERVICE_URL" >> $GITHUB_OUTPUT
+          echo "### Deployment Complete 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service URL**: https://$SERVICE_URL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: $IMAGE_URI" >> $GITHUB_STEP_SUMMARY
+
+      - name: Deployment status
+        run: |
+          echo "Deployment completed successfully!"
+          echo "Service URL: ${{ steps.deploy.outputs.service-url }}"
