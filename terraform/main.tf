@@ -2,11 +2,61 @@ provider "aws" {
   region = var.aws_region
 }
 
+# KMS key for encrypting SSM parameters, CloudWatch Logs, and SQS
+resource "aws_kms_key" "app" {
+  description             = "KMS key for ${var.app_name} encryption"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAccountAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${var.aws_region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "${var.app_name}-kms-key"
+    Application = var.app_name
+  }
+}
+
+resource "aws_kms_alias" "app" {
+  name          = "alias/${var.app_name}"
+  target_key_id = aws_kms_key.app.key_id
+}
+
+data "aws_caller_identity" "current" {}
+
 # SSM Parameters for API Keys (placeholders - set manually in AWS Console)
 resource "aws_ssm_parameter" "openai_api_key" {
   name        = "/${var.app_name}/openai-api-key"
   description = "OpenAI API Key for ${var.app_name}"
   type        = "SecureString"
+  key_id      = aws_kms_key.app.arn
   value       = "PLACEHOLDER_CHANGE_ME"
 
   lifecycle {
@@ -23,6 +73,7 @@ resource "aws_ssm_parameter" "mistral_api_key" {
   name        = "/${var.app_name}/mistral-api-key"
   description = "Mistral API Key for ${var.app_name}"
   type        = "SecureString"
+  key_id      = aws_kms_key.app.arn
   value       = "PLACEHOLDER_CHANGE_ME"
 
   lifecycle {
@@ -82,19 +133,65 @@ resource "aws_iam_role_policy" "lambda_ssm_policy" {
           aws_ssm_parameter.openai_api_key.arn,
           aws_ssm_parameter.mistral_api_key.arn
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = [
+          aws_kms_key.app.arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage"
+        ]
+        Resource = [
+          aws_sqs_queue.lambda_dlq.arn
+        ]
       }
     ]
   })
 }
 
+# Policy to allow Lambda to write X-Ray traces
+resource "aws_iam_role_policy_attachment" "lambda_xray" {
+  role       = aws_iam_role.lambda_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}
+
+# SQS Dead Letter Queue for Lambda
+resource "aws_sqs_queue" "lambda_dlq" {
+  name                    = "${var.app_name}-lambda-dlq"
+  kms_master_key_id       = aws_kms_key.app.arn
+  message_retention_seconds = 1209600 # 14 days
+
+  tags = {
+    Name        = "${var.app_name}-lambda-dlq"
+    Application = var.app_name
+  }
+}
+
 # Lambda function using container image
 resource "aws_lambda_function" "app" {
-  function_name = var.app_name
-  role          = aws_iam_role.lambda_execution_role.arn
-  package_type  = "Image"
-  image_uri     = var.image_identifier
-  timeout       = 300
-  memory_size   = 1024
+  # checkov:skip=CKV_AWS_272:Code signing is not supported for container image Lambda functions
+  function_name                  = var.app_name
+  role                           = aws_iam_role.lambda_execution_role.arn
+  package_type                   = "Image"
+  image_uri                      = var.image_identifier
+  timeout                        = 300
+  memory_size                    = 1024
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.lambda_dlq.arn
+  }
 
   environment {
 
@@ -116,7 +213,8 @@ resource "aws_lambda_function" "app" {
 # CloudWatch Log Group for Lambda
 resource "aws_cloudwatch_log_group" "lambda_logs" {
   name              = "/aws/lambda/${var.app_name}"
-  retention_in_days = 7
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.app.arn
 
   tags = {
     Name        = "${var.app_name}-logs"
@@ -172,7 +270,8 @@ resource "aws_apigatewayv2_stage" "default" {
 # CloudWatch Log Group for API Gateway
 resource "aws_cloudwatch_log_group" "api_logs" {
   name              = "/aws/apigateway/${var.app_name}"
-  retention_in_days = 7
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.app.arn
 
   tags = {
     Name        = "${var.app_name}-api-logs"
@@ -191,9 +290,10 @@ resource "aws_apigatewayv2_integration" "lambda" {
 
 # API Gateway Route (catch-all)
 resource "aws_apigatewayv2_route" "default" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "$default"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "AWS_IAM"
 }
 
 # Lambda permission for API Gateway to invoke
