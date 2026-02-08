@@ -1,0 +1,236 @@
+name: Terraform Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to perform'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+        default: 'plan'
+
+env:
+  AWS_REGION: eu-west-3
+  TF_VERSION: 1.9.0
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Get ECR repository URI
+        id: ecr-uri
+        run: |
+          ECR_URI=$(aws ecr describe-repositories \
+            --repository-names patient-insight \
+            --region ${{ env.AWS_REGION }} \
+            --query 'repositories[0].repositoryUri' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$ECR_URI" ]; then
+            echo "Creating ECR repository..."
+            ECR_URI=$(aws ecr create-repository \
+              --repository-name patient-insight \
+              --region ${{ env.AWS_REGION }} \
+              --query 'repository.repositoryUri' \
+              --output text)
+          fi
+
+          echo "ecr-uri=${ECR_URI}" >> $GITHUB_OUTPUT
+          echo "ECR Repository: ${ECR_URI}"
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        env:
+          TF_VAR_image_identifier: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_mistral_api_key: ${{ secrets.MISTRAL_API_KEY }}
+          TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
+          TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
+        run: |
+          terraform plan -no-color -out=tfplan
+        continue-on-error: false
+
+      - name: Save Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/tfplan
+          retention-days: 5
+
+      - name: Create Plan Summary
+        if: always()
+        run: |
+          echo "## Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Format Check**: ${{ steps.fmt.outcome == 'success' && '✅ Passed' || '⚠️ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Validation**: ${{ steps.validate.outcome == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Plan**: ${{ steps.plan.outcome == 'success' && '✅ Completed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **ECR Image**: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment PR with Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### Terraform Plan 📋
+
+            **Format Check**: \`${{ steps.fmt.outcome }}\`
+            **Validation**: \`${{ steps.validate.outcome }}\`
+            **Plan**: \`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan Details</summary>
+
+            \`\`\`terraform
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  terraform-apply:
+    name: Terraform Apply
+    needs: terraform-plan
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment:
+      name: terraform-production
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Get ECR repository URI
+        id: ecr-uri
+        run: |
+          ECR_URI=$(aws ecr describe-repositories \
+            --repository-names patient-insight-extractor \
+            --region ${{ env.AWS_REGION }} \
+            --query 'repositories[0].repositoryUri' \
+            --output text)
+
+          echo "ecr-uri=${ECR_URI}" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/
+
+      - name: Terraform Apply
+        id: apply
+        env:
+          TF_VAR_image_identifier: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_mistral_api_key: ${{ secrets.MISTRAL_API_KEY }}
+          TF_VAR_model_provider: ${{ secrets.MODEL_PROVIDER || 'openai' }}
+          TF_VAR_model_name: ${{ secrets.MODEL_NAME || 'gpt-4o' }}
+        run: |
+          terraform apply -auto-approve tfplan
+
+      - name: Get App Runner URL
+        id: output
+        run: |
+          SERVICE_URL=$(terraform output -raw app_runner_service_url 2>/dev/null || echo "not available")
+          echo "service-url=${SERVICE_URL}" >> $GITHUB_OUTPUT
+
+      - name: Create Apply Summary
+        if: always()
+        run: |
+          echo "## Terraform Apply Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Apply Status**: ${{ steps.apply.outcome == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **ECR Image**: ${{ steps.ecr-uri.outputs.ecr-uri }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Service URL" >> $GITHUB_STEP_SUMMARY
+          echo "🚀 **App Runner URL**: https://${{ steps.output.outputs.service-url }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Apply Status
+        if: steps.apply.outcome == 'success'
+        run: |
+          echo "✅ Infrastructure deployment completed successfully!"
+          echo "Service URL: https://${{ steps.output.outputs.service-url }}"
