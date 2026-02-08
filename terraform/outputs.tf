@@ -1,11 +1,16 @@
-output "app_runner_service_url" {
-  description = "The URL of the App Runner service"
-  value       = aws_apprunner_service.this.service_url
+output "api_gateway_url" {
+  description = "The URL of the API Gateway endpoint"
+  value       = aws_apigatewayv2_stage.default.invoke_url
 }
 
-output "app_runner_service_arn" {
-  description = "The ARN of the App Runner service"
-  value       = aws_apprunner_service.this.arn
+output "lambda_function_name" {
+  description = "The name of the Lambda function"
+  value       = aws_lambda_function.app.function_name
+}
+
+output "lambda_function_arn" {
+  description = "The ARN of the Lambda function"
+  value       = aws_lambda_function.app.arn
 }
 
 output "ssm_openai_api_key_parameter" {
@@ -31,10 +36,10 @@ output "instructions" {
        aws ssm put-parameter --name "${aws_ssm_parameter.openai_api_key.name}" --value "your-openai-key-here" --type SecureString --overwrite --region ${var.aws_region}
        aws ssm put-parameter --name "${aws_ssm_parameter.mistral_api_key.name}" --value "your-mistral-key-here" --type SecureString --overwrite --region ${var.aws_region}
 
-    3. Restart the App Runner service to pick up the new values:
-       aws apprunner start-deployment --service-arn ${aws_apprunner_service.this.arn} --region ${var.aws_region}
+    3. Re-apply Terraform to inject the new API keys into Lambda:
+       terraform apply -var="image_identifier=<ECR_URI>:latest"
 
     4. Access your application at:
-       https://${aws_apprunner_service.this.service_url}
+       ${aws_apigatewayv2_stage.default.invoke_url}
   EOT
 }

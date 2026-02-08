@@ -1,30 +1,40 @@
-# Dockerfile for Patient Insight Extractor
+# Dockerfile for Patient Insight Extractor - Lambda compatible
+# Uses AWS Lambda Web Adapter to run Streamlit in Lambda
 
-# Use an official Python runtime as a parent image
-FROM python:3.11-slim
+FROM public.ecr.aws/lambda/python:3.11
 
-# Set the working directory in the container
-WORKDIR /app
+# Copy Lambda Web Adapter from public ECR
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
+
+# Set environment variables for Lambda Web Adapter
+ENV PORT=8501
+ENV AWS_LWA_INVOKE_MODE=response_stream
+
+# Set the working directory
+WORKDIR ${LAMBDA_TASK_ROOT}
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+RUN yum install -y \
+    gcc \
+    gcc-c++ \
+    make \
+    && yum clean all
 
 # Install uv for fast dependency management
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
-# Copy the current directory contents into the container at /app
-COPY . .
+# Copy project files
+COPY pyproject.toml uv.lock ./
+COPY *.py ./
 
-# Install project dependencies using uv
-RUN uv sync
+# Install dependencies using uv
+RUN uv sync --frozen
 
-# Expose the port Streamlit runs on
-EXPOSE 8501
+# Create startup script
+RUN echo '#!/bin/sh' > /opt/bootstrap && \
+    echo 'exec uv run streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true --server.runOnSave=false' >> /opt/bootstrap && \
+    chmod +x /opt/bootstrap
 
-# Run the application
-CMD ["uv", "run", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Lambda handler (not used with Web Adapter, but required)
+CMD ["app.handler"]

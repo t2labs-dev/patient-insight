@@ -3,6 +3,7 @@ import warnings
 
 from dotenv import load_dotenv
 from langchain_mistralai import ChatMistralAI
+from secrets_manager import get_secret
 
 # Ignorer l'avertissement de dépréciation de Pydantic V1 sur Python 3.14+
 warnings.filterwarnings("ignore", category=UserWarning, message=".*Pydantic V1.*")
@@ -62,24 +63,32 @@ class InsightExtractor:
     def __init__(self, model_provider: str = "openai", model_name: Optional[str] = None, api_key: Optional[str] = None, base_url: Optional[str] = None):
         """
         Initialize the extractor with a specific provider and model.
-        :param model_provider: 'openai' or 'ollama' (for local)
-        :param model_name: Name of the model (e.g. 'gpt-4o', 'llama3')
-        :param api_key: API key for OpenAI
+        :param model_provider: 'openai', 'mistral', or 'ollama' (for local)
+        :param model_name: Name of the model (e.g. 'gpt-4o', 'llama3', 'mistral-small-latest')
+        :param api_key: API key (optional - auto-resolved from environment/SSM if not provided)
         :param base_url: Base URL for local models or proxy
         """
         if model_provider == "openai":
+            # Resolve OpenAI API key: use provided key, or auto-resolve from environment/SSM
+            resolved_api_key = api_key or get_secret("OPENAI_API_KEY", required=True)
             self.llm = ChatOpenAI(
                 model=model_name or "gpt-4o",
-                api_key=api_key or os.getenv("OPENAI_API_KEY"),
+                api_key=resolved_api_key,
                 base_url=base_url
             )
         elif model_provider == "ollama":
+            # Ollama doesn't require API keys
             self.llm = ChatOllama(
                 model=model_name or "llama3",
                 base_url=base_url or "http://localhost:11434"
             )
         elif model_provider == "mistral":
-            self.llm = ChatMistralAI(model=model_name or "mistral-small-latest")
+            # Resolve Mistral API key: use provided key, or auto-resolve from environment/SSM
+            resolved_api_key = api_key or get_secret("MISTRAL_API_KEY", required=True)
+            self.llm = ChatMistralAI(
+                model=model_name or "mistral-small-latest",
+                api_key=resolved_api_key
+            )
         else:
             raise ValueError(f"Provider {model_provider} non supporté.")
 

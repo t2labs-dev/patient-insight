@@ -35,9 +35,9 @@ resource "aws_ssm_parameter" "mistral_api_key" {
   }
 }
 
-# IAM Role for App Runner to access ECR
-resource "aws_iam_role" "app_runner_access_role" {
-  name = "${var.app_name}-app-runner-access-role"
+# IAM Role for Lambda execution
+resource "aws_iam_role" "lambda_execution_role" {
+  name = "${var.app_name}-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -46,50 +46,28 @@ resource "aws_iam_role" "app_runner_access_role" {
         Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          Service = "build.apprunner.amazonaws.com"
+          Service = "lambda.amazonaws.com"
         }
-      },
+      }
     ]
   })
 
   tags = {
-    Name        = "${var.app_name}-access-role"
+    Name        = "${var.app_name}-lambda-role"
     Application = var.app_name
   }
 }
 
-resource "aws_iam_role_policy_attachment" "app_runner_access_policy" {
-  role       = aws_iam_role.app_runner_access_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess"
+# Attach basic Lambda execution policy (for CloudWatch Logs)
+resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
+  role       = aws_iam_role.lambda_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# IAM Role for App Runner instance (to access SSM parameters)
-resource "aws_iam_role" "app_runner_instance_role" {
-  name = "${var.app_name}-app-runner-instance-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "tasks.apprunner.amazonaws.com"
-        }
-      },
-    ]
-  })
-
-  tags = {
-    Name        = "${var.app_name}-instance-role"
-    Application = var.app_name
-  }
-}
-
-# Policy to allow App Runner to read SSM parameters
-resource "aws_iam_role_policy" "app_runner_ssm_policy" {
-  name = "${var.app_name}-ssm-access"
-  role = aws_iam_role.app_runner_instance_role.id
+# Policy to allow Lambda to read SSM parameters
+resource "aws_iam_role_policy" "lambda_ssm_policy" {
+  name = "${var.app_name}-lambda-ssm-access"
+  role = aws_iam_role.lambda_execution_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -109,43 +87,120 @@ resource "aws_iam_role_policy" "app_runner_ssm_policy" {
   })
 }
 
-resource "aws_apprunner_service" "this" {
-  service_name = var.app_name
+# Lambda function using container image
+resource "aws_lambda_function" "app" {
+  function_name = var.app_name
+  role          = aws_iam_role.lambda_execution_role.arn
+  package_type  = "Image"
+  image_uri     = var.image_identifier
+  timeout       = 300
+  memory_size   = 1024
 
-  source_configuration {
-    authentication_configuration {
-      access_role_arn = aws_iam_role.app_runner_access_role.arn
+  environment {
+
+    variables = {
+      MODEL_PROVIDER  = var.model_provider
+      MODEL_NAME      = var.model_name
+      # SSM parameter names (start with '/') - secrets_manager.py will auto-detect and retrieve from SSM
+      OPENAI_API_KEY  = aws_ssm_parameter.openai_api_key.name
+      MISTRAL_API_KEY = aws_ssm_parameter.mistral_api_key.name
     }
-    image_repository {
-      image_configuration {
-        port = "8501"
-
-        # Non-sensitive configuration as environment variables
-        runtime_environment_variables = {
-          MODEL_PROVIDER = var.model_provider
-          MODEL_NAME     = var.model_name
-        }
-
-        # Sensitive API keys from SSM Parameter Store
-        runtime_environment_secrets = {
-          OPENAI_API_KEY  = aws_ssm_parameter.openai_api_key.arn
-          MISTRAL_API_KEY = aws_ssm_parameter.mistral_api_key.arn
-        }
-      }
-      image_identifier      = var.image_identifier
-      image_repository_type = var.image_repo_type
-    }
-    auto_deployments_enabled = false
-  }
-
-  instance_configuration {
-    cpu               = "1024"
-    memory            = "2048"
-    instance_role_arn = aws_iam_role.app_runner_instance_role.arn
   }
 
   tags = {
     Name        = var.app_name
     Application = var.app_name
   }
+}
+
+# CloudWatch Log Group for Lambda
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  name              = "/aws/lambda/${var.app_name}"
+  retention_in_days = 7
+
+  tags = {
+    Name        = "${var.app_name}-logs"
+    Application = var.app_name
+  }
+}
+
+# API Gateway HTTP API
+resource "aws_apigatewayv2_api" "api" {
+  name          = "${var.app_name}-api"
+  protocol_type = "HTTP"
+  description   = "HTTP API for ${var.app_name}"
+
+  cors_configuration {
+    allow_origins = ["*"]
+    allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allow_headers = ["*"]
+    max_age       = 300
+  }
+
+  tags = {
+    Name        = "${var.app_name}-api"
+    Application = var.app_name
+  }
+}
+
+# API Gateway Stage
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = "$default"
+  auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_logs.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+    })
+  }
+
+  tags = {
+    Name        = "${var.app_name}-stage"
+    Application = var.app_name
+  }
+}
+
+# CloudWatch Log Group for API Gateway
+resource "aws_cloudwatch_log_group" "api_logs" {
+  name              = "/aws/apigateway/${var.app_name}"
+  retention_in_days = 7
+
+  tags = {
+    Name        = "${var.app_name}-api-logs"
+    Application = var.app_name
+  }
+}
+
+# Lambda Integration with API Gateway
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id             = aws_apigatewayv2_api.api.id
+  integration_type   = "AWS_PROXY"
+  integration_uri    = aws_lambda_function.app.invoke_arn
+  integration_method = "POST"
+  payload_format_version = "2.0"
+}
+
+# API Gateway Route (catch-all)
+resource "aws_apigatewayv2_route" "default" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# Lambda permission for API Gateway to invoke
+resource "aws_lambda_permission" "api_gateway" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.app.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
