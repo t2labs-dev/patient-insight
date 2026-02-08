@@ -1,18 +1,18 @@
 name: Terraform Infrastructure
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'terraform/**'
-      - '.github/workflows/terraform.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'terraform/**'
-      - '.github/workflows/terraform.yml'
+#  push:
+#    branches:
+#      - main
+#    paths:
+#      - 'terraform/**'
+#      - '.github/workflows/terraform.yml'
+#  pull_request:
+#    branches:
+#      - main
+#    paths:
+#      - 'terraform/**'
+#      - '.github/workflows/terraform.yml'
   workflow_dispatch:
     inputs:
       action:
@@ -183,7 +183,7 @@ jobs:
         id: ecr-uri
         run: |
           ECR_URI=$(aws ecr describe-repositories \
-            --repository-names patient-insight-extractor \
+            --repository-names patient-insight \
             --region ${{ env.AWS_REGION }} \
             --query 'repositories[0].repositoryUri' \
             --output text)

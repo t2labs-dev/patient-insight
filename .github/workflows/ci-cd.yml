@@ -11,8 +11,8 @@ on:
 
 env:
   AWS_REGION: eu-west-3
-  ECR_REPOSITORY: patient-insight-extractor
-  APP_RUNNER_SERVICE_NAME: patient-insight-extractor
+  ECR_REPOSITORY: patient-insight
+  APP_RUNNER_SERVICE_NAME: patient-insight
 
 jobs:
   build-and-test:
