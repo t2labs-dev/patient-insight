@@ -32,3 +32,9 @@ variable "model_name" {
   type        = string
   default     = "gpt-4o"
 }
+
+variable "lambda_reserved_concurrency" {
+  description = "Reserved concurrent executions for the Lambda function"
+  type        = number
+  default     = 1
+}

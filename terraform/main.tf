@@ -164,8 +164,8 @@ resource "aws_iam_role_policy_attachment" "lambda_xray" {
 
 # SQS Dead Letter Queue for Lambda
 resource "aws_sqs_queue" "lambda_dlq" {
-  name                    = "${var.app_name}-lambda-dlq"
-  kms_master_key_id       = aws_kms_key.app.arn
+  name                      = "${var.app_name}-lambda-dlq"
+  kms_master_key_id         = aws_kms_key.app.arn
   message_retention_seconds = 1209600 # 14 days
 
   tags = {
@@ -196,8 +196,8 @@ resource "aws_lambda_function" "app" {
   environment {
 
     variables = {
-      MODEL_PROVIDER  = var.model_provider
-      MODEL_NAME      = var.model_name
+      MODEL_PROVIDER = var.model_provider
+      MODEL_NAME     = var.model_name
       # SSM parameter names (start with '/') - secrets_manager.py will auto-detect and retrieve from SSM
       OPENAI_API_KEY  = aws_ssm_parameter.openai_api_key.name
       MISTRAL_API_KEY = aws_ssm_parameter.mistral_api_key.name
@@ -281,10 +281,10 @@ resource "aws_cloudwatch_log_group" "api_logs" {
 
 # Lambda Integration with API Gateway
 resource "aws_apigatewayv2_integration" "lambda" {
-  api_id             = aws_apigatewayv2_api.api.id
-  integration_type   = "AWS_PROXY"
-  integration_uri    = aws_lambda_function.app.invoke_arn
-  integration_method = "POST"
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.app.invoke_arn
+  integration_method     = "POST"
   payload_format_version = "2.0"
 }
 
