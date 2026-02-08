@@ -4,9 +4,21 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '**.py'
+      - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - '.github/workflows/ci-cd.yml'
   pull_request:
     branches:
       - main
+    paths:
+      - '**.py'
+      - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'requirements.txt'
+      - '.github/workflows/ci-cd.yml'
   workflow_dispatch:
 
 env:
