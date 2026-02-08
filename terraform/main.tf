@@ -1,6 +1,6 @@
 terraform {
   backend "s3" {
-    bucket       = "patient-insight-tf-state"
+    bucket       = "patient-insight-tf-state-production"
     key          = "terraform.tfstate"
     region       = "eu-west-3"
     encrypt      = true
@@ -10,6 +10,13 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = {
+      Application = var.app_name
+      Environment = "production"
+    }
+  }
 }
 
 # KMS key for encrypting SSM parameters, CloudWatch Logs, and SQS
@@ -49,8 +56,7 @@ resource "aws_kms_key" "app" {
   })
 
   tags = {
-    Name        = "${var.app_name}-kms-key"
-    Application = var.app_name
+    Name = "${var.app_name}-kms-key"
   }
 }
 
@@ -74,8 +80,7 @@ resource "aws_ssm_parameter" "openai_api_key" {
   }
 
   tags = {
-    Name        = "${var.app_name}-openai-api-key"
-    Application = var.app_name
+    Name = "${var.app_name}-openai-api-key"
   }
 }
 
@@ -91,8 +96,7 @@ resource "aws_ssm_parameter" "mistral_api_key" {
   }
 
   tags = {
-    Name        = "${var.app_name}-mistral-api-key"
-    Application = var.app_name
+    Name = "${var.app_name}-mistral-api-key"
   }
 }
 
@@ -114,8 +118,7 @@ resource "aws_iam_role" "lambda_execution_role" {
   })
 
   tags = {
-    Name        = "${var.app_name}-lambda-role"
-    Application = var.app_name
+    Name = "${var.app_name}-lambda-role"
   }
 }
 
@@ -179,8 +182,7 @@ resource "aws_sqs_queue" "lambda_dlq" {
   message_retention_seconds = 1209600 # 14 days
 
   tags = {
-    Name        = "${var.app_name}-lambda-dlq"
-    Application = var.app_name
+    Name = "${var.app_name}-lambda-dlq"
   }
 }
 
@@ -215,8 +217,7 @@ resource "aws_lambda_function" "app" {
   }
 
   tags = {
-    Name        = var.app_name
-    Application = var.app_name
+    Name = var.app_name
   }
 }
 
@@ -227,8 +228,7 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
   kms_key_id        = aws_kms_key.app.arn
 
   tags = {
-    Name        = "${var.app_name}-logs"
-    Application = var.app_name
+    Name = "${var.app_name}-logs"
   }
 }
 
@@ -246,8 +246,7 @@ resource "aws_apigatewayv2_api" "api" {
   }
 
   tags = {
-    Name        = "${var.app_name}-api"
-    Application = var.app_name
+    Name = "${var.app_name}-api"
   }
 }
 
@@ -272,8 +271,7 @@ resource "aws_apigatewayv2_stage" "default" {
   }
 
   tags = {
-    Name        = "${var.app_name}-stage"
-    Application = var.app_name
+    Name = "${var.app_name}-stage"
   }
 }
 
@@ -284,8 +282,7 @@ resource "aws_cloudwatch_log_group" "api_logs" {
   kms_key_id        = aws_kms_key.app.arn
 
   tags = {
-    Name        = "${var.app_name}-api-logs"
-    Application = var.app_name
+    Name = "${var.app_name}-api-logs"
   }
 }
 
