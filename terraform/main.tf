@@ -61,7 +61,7 @@ resource "aws_kms_key" "app" {
 }
 
 resource "aws_kms_alias" "app" {
-  name          = "alias/${var.app_name}"
+  name          = "alias/${var.app_name}-production"
   target_key_id = aws_kms_key.app.key_id
 }
 
@@ -164,6 +164,22 @@ resource "aws_iam_role_policy" "lambda_ssm_policy" {
         Resource = [
           aws_sqs_queue.lambda_dlq.arn
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:BatchCheckLayerAvailability"
+        ]
+        Resource = [
+          "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.app_name}"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = ["*"]
       }
     ]
   })
